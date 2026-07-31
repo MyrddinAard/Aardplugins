@@ -1,0 +1,1079 @@
+<?xml version="1.0" encoding="iso-8859-1"?>
+<!DOCTYPE muclient>
+
+<muclient>
+
+<plugin
+   name="Skinner_v2"
+   author="Myrddin, ChatGPT"
+   id="9a1a11afa688265806761d5c"
+   language="Lua"
+   purpose="Automatic corpse skinning for Aardwolf"
+   version="2.00"
+   requires="5.07"
+   save_state="y">
+
+<description trim="n"><![CDATA[
+Skinner v2
+
+A complete rewrite focused on reliability,
+maintainability and sequential processing.
+]]></description>
+
+</plugin>
+
+<include name="constants.lua"/>
+
+<triggers>
+
+<trigger
+    name="Skinner_Corpse"
+    group="Skinner"
+    enabled="y"
+    regexp="y"
+    match="^(?:\(\s*(\d+)\)\s+)?.*\(M\).*(?:corpse).*"
+    script="OnCorpseFound"
+    sequence="100"
+    keep_evaluating="y"
+/>
+<trigger
+    name="Skinner_NoCorpse"
+    enabled="y"
+    match="You didn't find a corpse suitable for skinning."
+    regexp="n"
+    script="OnSkinFailed"
+    sequence="100"
+/>
+<trigger
+    name="Skinner_SkinFail"
+    group="Skinner"
+    enabled="y"
+    match="You carve the corpse into a complete mess! You need more practice."
+    script="OnSkinFailed"
+    sequence="100"
+/>
+<trigger
+    name="Skinner_SkinSuccess"
+    group="Skinner"
+    enabled="y"
+    regexp="y"
+    match="^You make yourself .* skinned from .*$"
+    script="OnSkinSuccess"
+    sequence="100"
+/>
+<trigger
+    name="Skinner_BonusLoot"
+    group="Skinner"
+    enabled="y"
+    regexp="y"
+    match="^You craft .* further into: \((.+)\) .*$"
+    script="OnBonus"
+    sequence="100"
+/>
+<trigger
+    name="Skinner_findPrompt"
+    enabled="n"
+    group="Skinner"
+    match="^\[[0-9]+/[0-9]+hp [0-9]+/[0-9]+mn [0-9]+/[0-9]+mv .*?\]\s+\(.*\)\s+>$"
+    regexp="y"
+    script="OnPrompt"
+    sequence="100"
+/>
+<trigger
+    name="Skinner_Exits"
+    enabled="n"
+    group="Skinner"
+    match="^\[ Exits:.*\]$"
+    regexp="y"
+    script="OnLookFinished"
+    sequence="100"
+    />
+</triggers>
+
+<aliases>
+    <alias
+        match="^skinner(?: (.*))?$"
+        enabled="y"
+        regexp="y"
+        sequence="100"
+        script="AliasSkinner"
+    />
+</aliases>
+
+<script>
+
+<![CDATA[
+--Constants
+VERSION = "2.00"
+
+PLUGIN_NAME = "Skinner v2"
+
+PLUGIN_COLOR = "khaki"
+require "serialize"
+require "wait"
+require "commas"
+require "gmcphelper"
+
+------------------------------------------------
+-- Alias Handler
+------------------------------------------------
+function AliasSkinner(name, line, wildcards)
+--ColourNote("yellow", "", "AliasSkinner called.")
+    local command = wildcards[1] or ""
+
+    command = command:lower()
+
+    ------------------------------------------------
+    -- No argument
+    ------------------------------------------------
+
+    if command == "" then
+        Skinner.UI.Print("Skinner v"..VERSION)
+        Skinner.UI.Print("Type 'skinner status' for information.")
+        return
+    end
+
+    ------------------------------------------------
+    -- Status
+    ------------------------------------------------
+
+    if command == "status" then
+
+        Skinner.UI.Print("Version "..VERSION)
+        Skinner.UI.Print("Enabled: "..tostring(Skinner.Config.enabled))
+        Skinner.UI.Print("State: "..Skinner.Session.state)
+        Skinner.UI.Print("Skin Type: "..Skinner.Config.skintype)
+        Skinner.UI.Print("Total Skins: "..Skinner.Stats.totalSkins)
+
+        return
+
+    end
+    ------------------------------------------------
+    -- Help
+    ------------------------------------------------
+
+    if command == "help" then
+
+        Skinner.UI.Print("Skinner help commands - Skinner Version "..VERSION)
+        Skinner.UI.Print("skinner help: shows this list of commands")
+        Skinner.UI.Print("skinner enable: Turns ON automatic skinning after combat")
+        Skinner.UI.Print("skinner disable: Turns OFF automatic skinning")
+        Skinner.UI.Print("----------------------------------------------------------------")
+        Skinner.UI.Print("To set skin type, use: ")
+        Skinner.UI.Print("skinner cloak|leggings|helm|sleeves|gloves|boots")
+        Skinner.UI.Print("----------------------------------------------------------------")
+        Skinner.UI.Print("By default, we will preserve all bonus loot skins, and drop rest")
+        Skinner.UI.Print("----------------------------------------------------------------")
+        Skinner.UI.Print("Skinner stats : will show all-time data (local print only)")
+        Skinner.UI.Print("Skinner report <chan>: will report data to given channel, ie-gtell")
+        Skinner.UI.Print("----------------------------------------------------------------")
+        Skinner.UI.Print("skinner debug on: Turns ON DEBUG messages (SPAM WARNING)")
+        Skinner.UI.Print("skinner debug off: Turns OFF DEBUG messages")
+        return
+    end
+
+    ------------------------------------------------
+    -- Enable
+    ------------------------------------------------
+
+    if command == "enable" then
+        Skinner.Engine.Enable()
+        return
+    end
+
+    ------------------------------------------------
+    -- Disable
+    ------------------------------------------------
+
+    if command == "disable" then
+        Skinner.Engine.Disable()
+        return
+    end
+    ------------------------------------------------
+    -- Cloak
+    ------------------------------------------------
+
+    if command == "cloak" then
+        Skinner.Config.skintype = "cloak"
+        Skinner.UI.Print("Skin Type set to: "..Skinner.Config.skintype)
+        return
+    end
+    ------------------------------------------------
+    -- Helm
+    ------------------------------------------------
+
+    if command == "helm" then
+        Skinner.Config.skintype = "helm"
+        Skinner.UI.Print("Skin Type set to: "..Skinner.Config.skintype)
+        return
+    end
+
+    ------------------------------------------------
+    -- Leggings
+    ------------------------------------------------
+
+    if command == "leggings" then
+        Skinner.Config.skintype = "leggings"
+        Skinner.UI.Print("Skin Type set to: "..Skinner.Config.skintype)
+        return
+    end
+
+    ------------------------------------------------
+    -- Gloves
+    ------------------------------------------------
+
+    if command == "gloves" then
+        Skinner.Config.skintype = "gloves"
+        Skinner.UI.Print("Skin Type set to: "..Skinner.Config.skintype)
+        return
+    end
+
+    ------------------------------------------------
+    -- Boots
+    ------------------------------------------------
+
+    if command == "boots" then
+        Skinner.Config.skintype = "boots"
+        Skinner.UI.Print("Skin Type set to: "..Skinner.Config.skintype)
+        return
+    end
+    
+    ------------------------------------------------
+    -- Stats
+    ------------------------------------------------
+
+    if command == "stats" then
+        Skinner.UI.PrintStats()
+        return
+    end
+
+    ------------------------------------------------
+    -- Report
+    ------------------------------------------------
+    if command == "report"
+        or command:match("^report%s+") then
+
+        local channel = command:match("^report%s+(.*)$")
+
+        Skinner.UI.PrintReport(channel)
+
+        return
+
+    end
+
+    ------------------------------------------------
+    -- Debug
+    ------------------------------------------------
+
+    if command == "debug on" then
+        Skinner.Config.debug = true
+        Skinner.Engine.Save()
+        Skinner.UI.Print("Debug enabled.")
+        return
+    end
+
+    if command == "debug off" then
+        Skinner.Config.debug = false
+        Skinner.Engine.Save()
+        Skinner.UI.Print("Debug disabled.")
+        return
+    end
+
+    ------------------------------------------------
+    -- Unknown
+    ------------------------------------------------
+
+    Skinner.UI.Print(
+    "Unknown command (use skinner help): " .. command
+    )
+end
+
+--------------------------------------------------
+-- GMCP Broadcast Handler
+--------------------------------------------------
+
+function OnPluginBroadcast(msg, id, name, text)
+    -- Ignore broadcasts from other plugins
+    if id ~= "3e7dedbe37e44942dd46d264" then
+        return
+    end
+
+    -- We only care about character status updates
+    if text ~= "char.status" then
+        return
+    end
+    local res, gmcparg = CallPlugin(
+        "3e7dedbe37e44942dd46d264",
+        "gmcpval",
+        "char.status"
+    )
+    --Skinner.Debug.Log("GMCP raw: " .. tostring(gmcparg))
+
+    if res ~= error_code.eOK then
+        return
+    end
+
+    --local gmcpdata
+    local luastmt = "gmcpdata = " .. gmcparg
+    assert(loadstring(luastmt))()
+    if not gmcpdata then
+        Skinner.Debug.Log("GMCP parse failed.")
+        return
+    end
+    Skinner.Debug.Log(
+        "GMCP state: " ..
+        tostring(gmcpdata.state) ..
+        " (" ..
+        tostring(gmcpdata.pos) ..
+        ")"
+    )
+
+    local state = tonumber(gmcpdata.state)
+
+    -- Combat started
+    if state == 8 then
+        Skinner.Session.inCombat = true
+        return
+    end
+
+    -- Combat ended
+    if state == 3 and Skinner.Session.inCombat then
+        Skinner.Session.inCombat = false
+        Skinner.Engine.SetState(Skinner.State.SCANNING)
+        EnableTrigger("Skinner_Exits", true)
+        --Skinner.Debug.Log("Combat ended. Starting skinning session.")
+        Skinner.Engine.StartSession()
+    end
+end
+
+--------------------------------------------------
+-- Event Handlers (called by triggers)
+--------------------------------------------------
+
+function OnCorpseFound(name, line, wildcards)
+    if Skinner.Session.state ~= Skinner.State.SCANNING then
+        return
+    end
+    local count = tonumber(wildcards[1])
+    if not count then
+        count = 1
+    end
+    Skinner.Debug.Log(
+        string.format("Found %d corpse(s).", count)
+        )
+    Skinner.Engine.QueueCorpse(count)
+
+end
+
+function OnSkinSuccess()
+    Skinner.Debug.Log("Corpse skinned")
+    Skinner.Engine.RecordSkin()
+    Skinner.Engine.SkinSucceeded()
+end
+
+function OnSkinFailed(name, line, wildcards)
+    Skinner.Debug.Log("Skin attempt failed: " .. line)
+    Skinner.Engine.RecordFailure()
+    Skinner.Engine.SkinFailed()
+end
+
+function OnBonus(name, line, wildcards)
+    local quality = wildcards[1]
+    quality = quality:gsub("[()]", "")
+    Skinner.Engine.RecordBonus(quality)
+    Skinner.Engine.AddBonus(quality)
+end
+
+function OnLookFinished(name, line, wildcards)
+    Skinner.Debug.Log("Exit Trigger Fired.")
+    EnableTrigger("Skinner_Exits", false)
+    EnableTrigger("Skinner_Corpse", true)
+    EnableTrigger("Skinner_findPrompt", true)
+        Skinner.Debug.Log(
+        "Corpse trigger enabled = " ..
+        tostring(GetTriggerOption("Skinner_Corpse","enabled"))
+        )
+end
+
+function OnPrompt(name, line, wildcards)
+    -- starts the skinning process
+    if Skinner.Session.state ~= Skinner.State.SCANNING then
+        return
+    end
+    Skinner.Debug.Log("Prompt detected. Room scan complete.")
+    EnableTrigger("Skinner_Exits", false)
+    EnableTrigger("Skinner_Corpse", false)
+    EnableTrigger("Skinner_findPrompt", false)
+    
+    Skinner.Engine.RoomScanFinished() --starts skinning 
+end
+
+Skinner = {
+
+    State = {
+        IDLE = "IDLE",
+        SCANNING = "SCANNING",
+        SKINNING = "SKINNING",
+        
+    },
+    Config = {},
+    Stats = {},
+    Session = {},
+    Engine = {},
+    UI = {},
+    Debug = {}
+}
+
+--Default Config
+Skinner.Config = {
+    enabled = true,
+    skintype = "cloak",
+    preserve = "bloot",
+    autoDrop = true,
+    autoBag = false,
+    bag = "",
+    debug = true,
+    finalBonusDelay = 0.35
+}
+
+-- Statistics
+Skinner.Stats = {
+    totalSkins = 0,
+    failedSkins    = 0,
+    totalBonuses   = 0,
+    
+    qualities = {}
+}
+
+-- State 
+function Skinner.Engine.SetState(newState)
+    Skinner.Session.state = newState
+    Skinner.Debug.Log("State -> " .. newState)
+end
+
+-- Session while processing one room
+Skinner.Session = {
+    state = Skinner.State.IDLE,
+    corpseQueue = {},
+    bonusCounts = {},
+    inCombat = false,
+    currentCorpse = nil,
+    skinsCompleted = 0,
+    skinsFailed = 0,
+    finishingRoom = false
+}
+
+------------------------------------------------
+-- Statistics
+------------------------------------------------
+
+function Skinner.Engine.RecordSkin()
+
+    Skinner.Stats.totalSkins =
+        Skinner.Stats.totalSkins + 1
+
+end
+
+
+function Skinner.Engine.RecordFailure()
+
+    Skinner.Stats.failedSkins =
+        Skinner.Stats.failedSkins + 1
+
+end
+
+function Skinner.Engine.RecordBonus(quality)
+
+    Skinner.Stats.totalBonuses =
+        Skinner.Stats.totalBonuses + 1
+
+    Skinner.Stats.qualities[quality] =
+        (Skinner.Stats.qualities[quality] or 0) + 1
+
+end
+
+--------------------------------------------------
+-- Core Engine
+--------------------------------------------------
+
+-- Start a new skinning session
+function Skinner.Engine.StartSession()
+    Skinner.Debug.Log("Session Started.")
+    --if Skinner.Session.state ~= Skinner.Session.SCANNING then
+      --  return
+    --end
+    Skinner.Debug.Log("Session Started and passed state check.")
+    if not Skinner.Config.enabled then
+        return
+    end
+    Skinner.Session.inCombat = false
+    Skinner.Session.corpseQueue = {}
+    Skinner.Session.bonusCounts = {}
+    Skinner.Session.currentCorpse = nil
+    Skinner.Session.skinsCompleted = 0
+    Skinner.Session.skinsFailed = 0
+    EnableTrigger("Skinner_Exits", true)
+    EnableTrigger("Skinner_findPrompt",false)
+    --EnableTrigger("Skinner_Corpse", true)
+        Skinner.Debug.Log(
+            "Corpse trigger enabled = " ..
+            tostring(GetTriggerOption("Skinner_Corpse","enabled"))
+        )
+    Skinner.Debug.Log("Sending LOOK.")
+    Skinner.Engine.SendCommand("look")
+end
+
+function Skinner.Engine.QueueCorpse(count)
+    count = count or 1
+    for i = 1, count do
+        table.insert(Skinner.Session.corpseQueue, true)
+    end
+    Skinner.Debug.Log(
+        string.format(
+            "Queued %d corpse(s). Queue=%d",
+            count,
+            #Skinner.Session.corpseQueue
+        )
+    )
+end
+
+function Skinner.Engine.RoomScanFinished()
+    local count = #Skinner.Session.corpseQueue
+    Skinner.Debug.Log(
+        string.format(
+            "Room scan complete. %d corpses found.",
+            count
+        )
+    )
+    Skinner.Engine.SetState(
+        Skinner.State.SKINNING
+        )
+    Skinner.Engine.ProcessNextCorpse()
+end
+
+
+function Skinner.Engine.ProcessNextCorpse()
+    Skinner.Debug.Log("ProcessNextCorpse Called.")
+    EnableTrigger("Skinner_Corpse", false)
+    
+    if #Skinner.Session.corpseQueue == 0 then
+
+        Skinner.Debug.Log("All corpses processed.")
+        Skinner.Debug.Log("Waiting briefly for final bonus output.")
+        Skinner.Session.finishingRoom = true
+
+        DoAfterSpecial(
+            Skinner.Config.finalBonusDelay,
+            "Skinner.Engine.ProcessBonuses()",
+            sendto.script
+        )
+
+        return
+
+    end
+    Skinner.Engine.SetState(Skinner.State.SKINNING)
+    Skinner.Debug.Log(
+        string.format(
+            "%d corpses remaining.",
+            #Skinner.Session.corpseQueue
+        )
+    )
+    Skinner.Engine.SendCommand(
+        "skin " .. Skinner.Config.skintype
+    )
+end
+
+function Skinner.Engine.SkinSucceeded()
+ Skinner.Debug.Log("Skin succeeded")
+    -- Remove the corpse we just finished
+    table.remove(Skinner.Session.corpseQueue, 1)
+    Skinner.Session.skinsCompleted =
+        Skinner.Session.skinsCompleted + 1
+    Skinner.Debug.Log(
+        string.format(
+            "Skin successful (%d completed).",
+            Skinner.Session.skinsCompleted
+        )
+    )
+    Skinner.Engine.ProcessNextCorpse()
+end
+
+function Skinner.Engine.SkinFailed()
+    Skinner.Debug.Log("Skin Failed")
+    -- Remove the corpse we attempted
+    table.remove(Skinner.Session.corpseQueue, 1)
+    Skinner.Session.skinsFailed =
+        Skinner.Session.skinsFailed + 1
+    Skinner.Debug.Log(
+        string.format(
+            "Skin failed (%d failed).",
+            Skinner.Session.skinsFailed
+        )
+    )
+    Skinner.Engine.ProcessNextCorpse()
+end
+
+function Skinner.Engine.ProcessBonuses()
+    if not Skinner.Session.finishingRoom then
+        return
+    end
+
+    Skinner.Session.finishingRoom = false
+
+    for quality, count in pairs(Skinner.Session.bonusCounts) do
+        local keyword = quality:lower()
+        for i = count, 1, -1 do
+            local item = i .. "." .. keyword
+            Skinner.Engine.SendCommand("keep " .. item)
+            Skinner.Debug.Log("bonus detected")
+            if Skinner.Config.preserve == "bloot" then
+                Skinner.Engine.SendCommand("preserve " .. item)
+            end
+
+            if Skinner.Config.autoBag then
+                Skinner.Engine.SendCommand(
+                    "put " .. item .. " " .. Skinner.Config.bag
+                )
+            end
+
+        end
+
+    end
+    Skinner.Engine.ProcessDrop()
+
+end
+
+function Skinner.Engine.Abort()
+    Skinner.UI.Print("Session abort called")
+    Skinner.Debug.Log(
+        "Session aborted."
+    )
+    Skinner.Session.corpseQueue = {}
+    Skinner.Session.bonusCounts = {}
+    Skinner.Session.currentCorpse = nil
+    Skinner.Engine.SetState(
+        Skinner.State.IDLE
+    )
+    EnableTrigger("Skinner_Exits", false)
+end
+
+function Skinner.Engine.SendCommand(cmd)
+
+    Skinner.Debug.Log("SEND>> " .. cmd)
+    Send(cmd)  --should be the only Send() in script
+
+end
+
+function Skinner.Engine.AddBonus(quality)
+    local counts = Skinner.Session.bonusCounts
+    counts[quality] = (counts[quality] or 0) + 1
+
+    Skinner.Debug.Log(string.format(
+         "*** BONUS DETECTED: %s (%d total this room)",
+        quality,
+        counts[quality]
+    ))
+end
+
+function Skinner.Engine.ProcessDrop()
+    Skinner.Debug.Log("Drop Process triggered")
+    if Skinner.Config.autoDrop then
+        Skinner.Engine.SendCommand(
+            "drop all."
+            ..Skinner.Config.skintype
+        )
+        Skinner.Debug.Log(
+            "Dropped normal skins."
+        )
+    end
+    Skinner.Engine.EndSession()
+
+end
+
+function Skinner.Engine.EndSession()
+    Skinner.Debug.Log("END SESSION triggered")
+    Skinner.Engine.PrintSummary()
+    Skinner.Session.corpseQueue = {}
+    Skinner.Session.bonusCounts = {}
+    Skinner.Session.currentCorpse = nil
+    Skinner.Engine.SetState(
+        Skinner.State.IDLE
+    )
+    EnableTrigger("Skinner_Exits", false)
+end
+
+function Skinner.Engine.PrintSummary()
+    -- shows room summary
+    Skinner.UI.Print("-----")
+    Skinner.UI.Print(
+        "Completed: "
+        .. Skinner.Session.skinsCompleted
+    )
+    Skinner.UI.Print(
+        "Failed: "
+        .. Skinner.Session.skinsFailed
+    )
+    for quality,count in
+        pairs(Skinner.Session.bonusCounts)
+    do
+        Skinner.UI.Print(
+            quality
+            ..": "
+            ..count
+        )
+    end
+    Skinner.UI.Print("-----")
+    Skinner.UI.Print("Room complete.")
+end
+
+function Skinner.Engine.Save()
+    OnPluginSaveState()
+end
+
+   -- Prints to screen messages
+function Skinner.UI.Print(msg)
+    ColourNote("khaki","","[Skinner] "..msg)
+end
+
+---------------------------------------
+--  Statistics Table helper functions 
+---------------------------------------
+function Skinner.UI.TableLine(text, colour)
+    ColourNote(
+        colour or "white",
+        "",
+        text
+    )
+end
+
+
+-------------------------------------
+-- Statistics Report
+-------------------------------------
+function Skinner.UI.PrintStats()
+    local stats = Skinner.Stats
+    stats.totalSkins   = stats.totalSkins   or 0
+    stats.failedSkins  = stats.failedSkins  or 0
+    stats.totalBonuses = stats.totalBonuses or 0
+    stats.qualities    = stats.qualities    or {}
+
+    local bonusRate = 0
+
+    if stats.totalSkins > 0 then
+        bonusRate = (stats.totalBonuses / stats.totalSkins) * 100
+    end
+    ------------------------------------------------
+    -- Build sortable quality list
+    ------------------------------------------------
+    local qualities = {}
+
+    for quality, count in pairs(stats.qualities) do
+
+        table.insert(qualities,
+        {
+            quality = quality,
+            count = count
+        })
+
+    end
+
+    table.sort(qualities,
+
+        function(a, b)
+
+            return a.count > b.count
+
+        end
+
+    )
+    ------------------------------------------------
+    -- Header
+    ------------------------------------------------
+
+    Skinner.UI.TableLine(
+        "========================================================",
+        "cyan"
+    )
+    Skinner.UI.TableLine(
+        "                 Skinner Statistics",
+        "yellow"
+    )
+    Skinner.UI.TableLine(
+        "========================================================",
+        "cyan"
+    )
+    Skinner.UI.TableLine("", "white")
+
+    ------------------------------------------------
+    -- General
+    ------------------------------------------------
+
+    Skinner.UI.TableLine("General", "yellow")
+    Skinner.UI.TableLine("-------", "yellow")
+
+    Skinner.UI.TableLine(
+        string.format(
+            "%-24s %10s",
+            "Total Skins",
+            commas(stats.totalSkins)
+        ),
+        "white"
+    )
+
+    Skinner.UI.TableLine(
+        string.format(
+            "%-24s %10s",
+            "Failed Skins",
+            commas(stats.failedSkins)
+        ),
+        "white"
+    )
+
+    Skinner.UI.TableLine(
+        string.format(
+            "%-24s %9.2f%%",
+            "Bonus Rate",
+            bonusRate
+        ),
+        "white"
+    )
+
+    Skinner.UI.TableLine("", "white")
+
+    ------------------------------------------------
+    -- Quality Breakdown
+    ------------------------------------------------
+        Skinner.UI.TableLine("Quality Breakdown", "yellow")
+
+    Skinner.UI.TableLine(
+            string.format(
+                "%-18s %8s %9s %9s",
+                "Quality",
+                "Count",
+                "% Total",
+                "% Bloot"
+            ),
+            "yellow"
+        )
+
+    Skinner.UI.TableLine(
+        "------------------------------------------------------------",
+        "yellow"
+    )
+     for _, item in ipairs(qualities) do
+
+        local blootPercent = 0
+        local totalPercent = 0
+
+        if stats.totalBonuses > 0 then
+            blootPercent = (item.count / stats.totalBonuses) * 100
+        end
+
+        if stats.totalSkins > 0 then
+            totalPercent = (item.count / stats.totalSkins) * 100
+        end
+
+        Skinner.UI.TableLine(
+            string.format(
+                "%-18s %8s %8.2f%% %8.2f%%",
+                item.quality,
+                commas(item.count),
+                totalPercent,
+                blootPercent
+            ),
+            "white"
+        )
+
+    end
+
+    Skinner.UI.TableLine("", "white")
+
+    ------------------------------------------------
+    -- Footer
+    ------------------------------------------------
+    Skinner.UI.TableLine(
+        "============================================================",
+        "cyan"
+    )
+
+end
+
+------------------------------------------------
+-- Channel Report
+------------------------------------------------
+
+function Skinner.UI.PrintReport(channel)
+
+    local stats = Skinner.Stats
+
+    if stats.totalSkins == 0 then
+
+        local text = "Skinner: No statistics recorded."
+
+        if channel and channel ~= "" then
+             Skinner.Engine.SendCommand(channel .. " " .. text)
+        else
+            Skinner.UI.Print(text)
+        end
+
+        return
+
+    end
+
+    --------------------------------------------
+    -- Build sorted quality list
+    --------------------------------------------
+
+    local qualities = {}
+
+    for quality, count in pairs(stats.qualities) do
+
+        table.insert(qualities,{
+            quality = quality,
+            count = count
+        })
+
+    end
+
+    table.sort(qualities,
+
+        function(a,b)
+
+            return a.count > b.count
+
+        end
+
+    )
+
+    --------------------------------------------
+    -- Base Report
+    --------------------------------------------
+
+    local report = string.format(
+
+        "Skinner: %s skins | Bonus %.2f%%",
+
+        commas(stats.totalSkins),
+
+        (stats.totalBonuses / stats.totalSkins) * 100
+
+    )
+
+    --------------------------------------------
+    -- Append Quality Percentages
+    --------------------------------------------
+
+    for _,item in ipairs(qualities) do
+
+        report = report ..
+
+            string.format(
+
+                " | %s %.2f%%",
+
+                item.quality,
+
+                (item.count / stats.totalSkins) * 100
+
+            )
+
+    end
+
+    --------------------------------------------
+    -- Send or Print
+    --------------------------------------------
+
+    if channel and channel ~= "" then
+
+        Skinner.Engine.SendCommand(channel .. " " .. report)
+
+    else
+
+        Skinner.UI.Print(report)
+
+    end
+
+end
+
+-------------------------------------
+-- Debug Log Parser
+-------------------------------------
+function Skinner.Debug.Log(msg)
+    if not Skinner.Config.debug then
+        return
+    end
+    ColourNote(
+    "silver",
+    "",
+    string.format(
+        "[DEBUG][%s] %s",
+        Skinner.Session.state,
+        msg
+    )
+)
+
+end
+
+-- Save State
+function OnPluginSaveState()
+    SetVariable(
+        "config",
+        serialize.save_simple(Skinner.Config)
+    )
+    SetVariable(
+        "stats",
+        serialize.save_simple(Skinner.Stats)
+    )
+end
+
+-- Load
+
+function LoadTable(name)
+
+    local s = GetVariable(name)
+
+    if s == nil or s == "" then
+        return nil
+    end
+
+    local f = loadstring("return "..s)
+
+    if not f then
+        return nil
+    end
+    return f()
+end
+
+-- Install
+function OnPluginInstall()
+    local cfg = LoadTable("config")
+    if cfg then
+        for k, v in pairs(cfg) do
+        Skinner.Config[k] = v
+        end
+    end
+    local st = LoadTable("stats")
+    if st then
+        for k, v in pairs(st) do
+        Skinner.Stats[k] = v
+        end
+    end
+    Skinner.UI.Print("Version "..VERSION.." loaded.")
+end
+
+function Skinner.Engine.Enable()
+    Skinner.Config.enabled = true
+    Skinner.UI.Print("Enabled.")
+    Skinner.Engine.Save()
+end
+
+function Skinner.Engine.Disable()
+    Skinner.Config.enabled = false
+    Skinner.Engine.Abort()
+    Skinner.UI.Print("Disabled.")
+    Skinner.Engine.Save()
+end
+]]>
+</script>
+
+</muclient>
