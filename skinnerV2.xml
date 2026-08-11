@@ -338,6 +338,9 @@ function OnPluginBroadcast(msg, id, name, text)
 
     -- Combat ended
     if state == 3 and Skinner.Session.inCombat then
+        if Skinner.Config.enabled == false then
+            return
+        end
         Skinner.Session.inCombat = false
         Skinner.Engine.SetState(Skinner.State.SCANNING)
         EnableTrigger("Skinner_Exits", true)
@@ -555,7 +558,9 @@ end
 function Skinner.Engine.ProcessNextCorpse()
     Skinner.Debug.Log("ProcessNextCorpse Called.")
     EnableTrigger("Skinner_Corpse", false)
-    
+    if Skinner.Config.enabled == false then
+            return
+        end
     if #Skinner.Session.corpseQueue == 0 then
 
         Skinner.Debug.Log("All corpses processed.")
@@ -584,7 +589,10 @@ function Skinner.Engine.ProcessNextCorpse()
 end
 
 function Skinner.Engine.SkinSucceeded()
- Skinner.Debug.Log("Skin succeeded")
+    if Skinner.Config.enabled == false then
+            return
+        end
+    Skinner.Debug.Log("Skin succeeded")
     -- Remove the corpse we just finished
     table.remove(Skinner.Session.corpseQueue, 1)
     Skinner.Session.skinsCompleted =
@@ -676,6 +684,9 @@ function Skinner.Engine.AddBonus(quality)
 end
 
 function Skinner.Engine.ProcessDrop()
+    if Skinner.Config.enabled == false then
+            return
+        end
     Skinner.Debug.Log("Drop Process triggered")
     if Skinner.Config.autoDrop then
         Skinner.Engine.SendCommand(
@@ -693,13 +704,7 @@ end
 function Skinner.Engine.EndSession()
     Skinner.Debug.Log("END SESSION triggered")
     Skinner.Engine.PrintSummary()
-    Skinner.Session.corpseQueue = {}
-    Skinner.Session.bonusCounts = {}
-    Skinner.Session.currentCorpse = nil
-    Skinner.Engine.SetState(
-        Skinner.State.IDLE
-    )
-    EnableTrigger("Skinner_Exits", false)
+    Skinner.Engine.ResetSession()
 end
 
 function Skinner.Engine.PrintSummary()
@@ -1044,6 +1049,47 @@ function LoadTable(name)
     return f()
 end
 
+
+function Skinner.Engine.ResetSession()
+
+    Skinner.Debug.Log("Resetting session.")
+
+    ------------------------------------------------
+    -- Clear runtime queues
+    ------------------------------------------------
+
+    Skinner.Session.corpseQueue = {}
+    Skinner.Session.bonusCounts = {}
+
+    ------------------------------------------------
+    -- Reset counters
+    ------------------------------------------------
+
+    Skinner.Session.completed = 0
+    Skinner.Session.failed = 0
+
+    ------------------------------------------------
+    -- Clear flags
+    ------------------------------------------------
+
+    Skinner.Session.finishingRoom = false
+
+    ------------------------------------------------
+    -- Disable scan triggers
+    ------------------------------------------------
+
+    EnableTrigger("Skinner_Exits", false)
+    EnableTrigger("Skinner_Corpse", false)
+    EnableTrigger("Skinner_findPrompt", false)
+
+    ------------------------------------------------
+    -- Return to idle
+    ------------------------------------------------
+
+    Skinner.Engine.SetState(Skinner.State.IDLE)
+
+end
+
 -- Install
 function OnPluginInstall()
     local cfg = LoadTable("config")
@@ -1069,9 +1115,9 @@ end
 
 function Skinner.Engine.Disable()
     Skinner.Config.enabled = false
-    Skinner.Engine.Abort()
-    Skinner.UI.Print("Disabled.")
+    Skinner.Engine.ResetSession()
     Skinner.Engine.Save()
+    Skinner.UI.Print("Disabled.")
 end
 ]]>
 </script>
